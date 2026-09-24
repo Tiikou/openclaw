@@ -3,9 +3,6 @@ import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
-// Clack redraws long interactive menus in-place. Keep a bounded window, but large
-// enough that the prompt preceding a full terminal redraw burst remains visible.
-const DEFAULT_MAX_LOG_BYTES = 1_048_576;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 
 const normalizeScriptOutput = (value) => value.replace(/\r?\n/g, "").replace(/\r/g, "");
@@ -19,34 +16,6 @@ const compact = (value) =>
   stripAnsi(value)
     .toLowerCase()
     .replace(/[^a-z]+/g, "");
-
-export function readLogTail(file, maxBytes = DEFAULT_MAX_LOG_BYTES) {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
-    throw new Error("maxBytes must be a positive integer");
-  }
-  const stats = fs.statSync(file);
-  if (!stats.isFile()) {
-    throw new Error(`${file} is not a file`);
-  }
-  const length = Math.min(stats.size, maxBytes);
-  const start = Math.max(0, stats.size - length);
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-export function logTailContains(file, needle, maxBytes = DEFAULT_MAX_LOG_BYTES) {
-  const compactNeedle = compact(needle);
-  if (!compactNeedle) {
-    return false;
-  }
-  return compact(readLogTail(file, maxBytes)).includes(compactNeedle);
-}
 
 export function logContains(file, needle) {
   const compactNeedle = compact(needle);
@@ -75,7 +44,7 @@ export function logContains(file, needle) {
         continue;
       }
       if (ansiState === "osc-escape") {
-        ansiState = character === "\\" ? "plain" : "osc";
+        ansiState = character === "\\" || character === "\u0007" ? "plain" : "osc";
         continue;
       }
       if (ansiState === "csi") {
@@ -99,13 +68,14 @@ export function logContains(file, needle) {
         continue;
       }
 
-      const lower = character.toLowerCase();
-      if (lower < "a" || lower > "z") {
-        continue;
-      }
-      compactWindow = `${compactWindow}${lower}`.slice(-compactNeedle.length);
-      if (compactWindow === compactNeedle) {
-        return true;
+      for (const lower of character.toLowerCase()) {
+        if (lower < "a" || lower > "z") {
+          continue;
+        }
+        compactWindow = `${compactWindow}${lower}`.slice(-compactNeedle.length);
+        if (compactWindow === compactNeedle) {
+          return true;
+        }
       }
     }
     return false;
