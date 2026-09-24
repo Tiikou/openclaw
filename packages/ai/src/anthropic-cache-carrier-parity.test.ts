@@ -58,6 +58,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         content: blocks ? [{ type: "text", text: "Runtime context" }] : "Runtime context",
         timestamp: 1,
         runtimeContextCarrier: true,
+        ...(retained ? { runtimeContextCarrierRetained: true } : {}),
       };
       for (const implementation of ["provider", "transport"] as const) {
         const messages: Context["messages"] = [

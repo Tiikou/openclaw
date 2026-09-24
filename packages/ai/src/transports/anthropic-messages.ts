@@ -17,7 +17,6 @@ import {
 import { isImageWithMediaPayload } from "../media-payload.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
-  bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
   resolveAnthropicThinkingEffort,
   supportsClaudeAdaptiveThinking,
@@ -143,8 +142,6 @@ export async function convertAnthropicMessages(
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
-  // Cache eligibility follows the same model contract as session context retention.
-  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -160,7 +157,7 @@ export async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+          if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
             options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
           }
           const userParam: AnthropicWireMessage = {
@@ -204,7 +201,7 @@ export async function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+      if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
