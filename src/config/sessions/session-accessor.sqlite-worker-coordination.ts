@@ -67,6 +67,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
   transport: SqliteMutationWorkerTransport,
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
+  mode: "retained" | "reconciliation" = "retained",
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
@@ -74,12 +75,91 @@ export async function withSqliteMutationWorkerCoordination<T>(
   const preparingError = () => {};
   worker.on("error", preparingError);
   try {
-    return await withSqliteWorkerLifecycleCoordination(context, actorId, run, async () => {
-      await terminateSqliteMutationWorker(transport);
-    });
+    return await withSqliteWorkerLifecycleCoordination(
+      context,
+      actorId,
+      run,
+      async () => {
+        await terminateSqliteMutationWorker(transport);
+      },
+      mode,
+    );
   } finally {
     worker.off("error", preparingError);
   }
+}
+
+// A dedicated cold Worker can leave this scope only by closing its result port and exiting.
+// If native cleanup is incomplete, retain its physical coordinator until that native exit.
+const unsettledColdWorkerCoordinators = new Set<
+  NonNullable<Awaited<ReturnType<typeof acquireSqliteWorkerLifecycle>>["coordinator"]>
+>();
+
+/** Cold preparation runs before this phase; native open, write, and close stay under one owner. */
+export async function runSqliteColdMutationLifecyclePhase<T>(
+  coordination: SqliteMutationWorkerCoordination,
+  operation: () => Promise<T>,
+  isNativeSettled: () => boolean,
+): Promise<T> {
+  const phase = coordination.reconciliation;
+  if (!phase) {
+    return operation();
+  }
+  const port = phase.open;
+  const prepared = await acquireSqliteWorkerLifecycle({
+    port,
+    databasePath: coordination.databasePath,
+    actorId: `${coordination.actorId}:open`,
+    deadlineNs: process.hrtime.bigint() + BigInt(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
+    runtime: coordination.stateContext.coordinatorRuntime,
+    onUnsettled() {},
+  });
+  let outcome: { value: T } | { error: unknown };
+  try {
+    const value = await withStateDatabaseCoordinatorRuntimeDirectory(
+      coordination.stateContext.coordinatorRuntime,
+      () => (prepared.delegate ? prepared.delegate.run(operation) : operation()),
+    );
+    outcome = { value };
+  } catch (error) {
+    outcome = { error };
+  }
+  const cleanupErrors: unknown[] = [];
+  if (prepared.coordinator) {
+    if (isNativeSettled()) {
+      try {
+        prepared.coordinator.release();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    } else {
+      unsettledColdWorkerCoordinators.add(prepared.coordinator);
+    }
+  }
+  try {
+    prepared.delegate?.close();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  port.close();
+  if (cleanupErrors.length) {
+    const error =
+      cleanupErrors.length === 1
+        ? cleanupErrors[0]
+        : new AggregateError(cleanupErrors, "Cold mutation lifecycle cleanup failed");
+    if ("error" in outcome) {
+      throw createSqliteLifecycleAggregateError(
+        [outcome.error, error],
+        "Cold mutation and lifecycle cleanup failed",
+        outcome.error,
+      );
+    }
+    throw error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 /** Each transport joins its native operation before relinquishing shared-state custody. */
