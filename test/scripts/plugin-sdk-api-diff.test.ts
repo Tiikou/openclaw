@@ -3,7 +3,6 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
-  globSync,
   mkdirSync,
   readFileSync,
   symlinkSync,
@@ -97,7 +96,9 @@ describe("Plugin SDK API diff CLI", () => {
     const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
     const installClaim = join(binDir, "install-claim");
     const blockedMarker = join(binDir, "install-blocked");
+    const firstInstallFinished = join(binDir, "first-install-finished");
     const releaseMarker = join(binDir, "install-release");
+    const renderStarted = join(binDir, "render-started");
     git(repo, ["init", "--quiet", "--initial-branch=main"]);
     mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
     mkdirSync(join(repo, "scripts/lib"), { recursive: true });
@@ -132,6 +133,8 @@ describe("Plugin SDK API diff CLI", () => {
       fakePnpm,
       `#!/bin/sh
 if mkdir "$PNPM_MARKER" 2>/dev/null; then
+  while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
+  : > "$PNPM_FIRST_FINISHED"
   exit 0
 fi
 : > "$PNPM_BLOCKED"
@@ -139,6 +142,14 @@ while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
 `,
     );
     chmodSync(fakePnpm, 0o755);
+    const renderProbe = join(binDir, "render-probe.cjs");
+    writeFileSync(
+      renderProbe,
+      `if (process.argv.includes("--render-root")) {
+  require("node:fs").writeFileSync(process.env.RENDER_STARTED, "started\\n");
+}
+`,
+    );
     const child = spawn(
       process.execPath,
       [
@@ -155,9 +166,12 @@ while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
         env: {
           ...process.env,
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${renderProbe}`.trim(),
           PNPM_MARKER: installClaim,
           PNPM_BLOCKED: blockedMarker,
+          PNPM_FIRST_FINISHED: firstInstallFinished,
           PNPM_RELEASE: releaseMarker,
+          RENDER_STARTED: renderStarted,
           RUNNER_TEMP: runnerTemp,
           TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
         },
@@ -174,10 +188,10 @@ while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
     });
     try {
       await waitFor(() => existsSync(blockedMarker), 10_000);
-      await new Promise((resolveWait) => {
-        setTimeout(resolveWait, 3_000);
-      });
-      expect(globSync("openclaw-plugin-sdk-api-diff-*/*.json", { cwd: runnerTemp })).toEqual([]);
+      await waitFor(() => existsSync(firstInstallFinished), 10_000);
+      await expect(waitFor(() => existsSync(renderStarted), 1_000)).rejects.toThrow(
+        "timed out waiting for Plugin SDK API diff child",
+      );
     } finally {
       writeFileSync(releaseMarker, "release\n");
     }
