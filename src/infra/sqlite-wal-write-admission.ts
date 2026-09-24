@@ -28,21 +28,22 @@ export function createSqliteWalMaintenanceScheduler(
   database: DatabaseSync,
   operation: () => void,
   onError: (error: unknown) => void,
-): () => void {
-  let pending = false;
+): () => Promise<void> {
+  let pending: Promise<void> | undefined;
   return () => {
     const admission = admissions.get(database);
     if (!admission) {
       operation();
-    } else if (!pending) {
-      pending = true;
-      void admission
-        .admit(operation)
-        .catch(onError)
-        .finally(() => {
-          pending = false;
-        });
+      return Promise.resolve();
     }
+    // Callers may observe completion; the admitted operation still runs once per pending slot.
+    pending ??= admission
+      .admit(operation)
+      .catch(onError)
+      .finally(() => {
+        pending = undefined;
+      });
+    return pending;
   };
 }
 
