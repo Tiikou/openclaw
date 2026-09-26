@@ -109,7 +109,6 @@ export async function runSqliteColdMutationLifecyclePhase<T>(
   const prepared = await acquireSqliteWorkerLifecycle({
     port,
     databasePath: coordination.databasePath,
-    actorId: `${coordination.actorId}:open`,
     deadlineNs: process.hrtime.bigint() + BigInt(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
     runtime: coordination.stateContext.coordinatorRuntime,
     onUnsettled() {},
@@ -118,7 +117,8 @@ export async function runSqliteColdMutationLifecyclePhase<T>(
   try {
     const value = await withStateDatabaseCoordinatorRuntimeDirectory(
       coordination.stateContext.coordinatorRuntime,
-      () => (prepared.delegate ? prepared.delegate.run(operation) : operation()),
+      // 9.6 Workers own their physical acquisition; there is no borrowed parent delegate.
+      operation,
     );
     outcome = { value };
   } catch (error) {
@@ -135,11 +135,6 @@ export async function runSqliteColdMutationLifecyclePhase<T>(
     } else {
       unsettledColdWorkerCoordinators.add(prepared.coordinator);
     }
-  }
-  try {
-    prepared.delegate?.close();
-  } catch (error) {
-    cleanupErrors.push(error);
   }
   port.close();
   if (cleanupErrors.length) {
@@ -171,7 +166,6 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   mode: "retained" | "reconciliation" = "retained",
 ): Promise<T> {
   let delegate: ReturnType<typeof tryCreateStateLifecycleDelegate>;
-  const phaseDelegates: NonNullable<typeof delegate>[] = [];
   const phases: ReturnType<typeof createSqliteWorkerLifecyclePreparation>[] = [];
   const controller = new AbortController();
   let releaseService: (() => void) | undefined;
@@ -189,10 +183,6 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
     const identity = context.admission.identity.key;
     let openAdmitted = false;
     const preparePhase = (phase: "open" | "close") => {
-      const runtime =
-        phase === "close"
-          ? { ...context.coordinatorRuntime, keepAlive: false }
-          : context.coordinatorRuntime;
       const preparation = createSqliteWorkerLifecyclePreparation({
         signal: controller.signal,
         assertCurrent() {
@@ -202,24 +192,6 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
           }
           assertExistingDatabaseIdentity(context.admission.databasePath, identity);
         },
-        borrow: () =>
-          withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
-            delegate ??= tryCreateStateLifecycleDelegate({
-              databasePath: context.admission.databasePath,
-              actorId,
-            });
-            // Each phase receives a fresh port; a late parent owner stays pinned to settlement.
-            const phaseDelegate = delegate
-              ? tryCreateStateLifecycleDelegate({
-                  databasePath: context.admission.databasePath,
-                  actorId: `${actorId}:${phase}`,
-                })
-              : undefined;
-            if (phaseDelegate) {
-              phaseDelegates.push(phaseDelegate);
-            }
-            return phaseDelegate?.port;
-          }),
         admit: () => undefined,
         dispatch() {
           if (phase === "open") {
@@ -293,7 +265,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
       cleanupErrors.push(error);
     }
   }
-  for (const held of [...phaseDelegates, ...(delegate ? [delegate] : [])]) {
+  for (const held of delegate ? [delegate] : []) {
     try {
       held.release();
     } catch (error) {
