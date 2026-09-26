@@ -266,6 +266,10 @@ function closeOpenClawStateDatabaseHandle(
     retainStateDatabaseClose(database);
   } else {
     retainedDatabaseHandles.delete(database.db);
+    // The cached data_version statement roots its native database from C++, and the
+    // shared-state WAL owner can reference this wrapper until that database is collected.
+    // Drop the dead statement with its closed handle so the pair stays collectable.
+    cachedDataVersionStatements.delete(database as OpenClawStateDatabase);
   }
   // A failed native close retains physical custody, never a successful cache hit.
   if (cachedDatabases.get(database.path)?.db === database.db) {
