@@ -44,7 +44,6 @@ import type {
 } from "./session-accessor.sqlite-reclamation-worker.js";
 import { withWorkerWriteAdmission } from "./session-accessor.sqlite-worker-admission.runtime.js";
 import {
-  runSqliteColdMutationLifecyclePhase,
   runWithSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
@@ -93,24 +92,16 @@ export async function runColdMutationWorkerPort(
     0,
     data.plan.databaseOptions,
     (databaseOptions) =>
-      runColdMutationWorker(
-        port,
-        {
-          ...data,
-          plan: { ...data.plan, databaseOptions },
-        },
-        request.coordination,
-      ),
+      runColdMutationWorker(port, {
+        ...data,
+        plan: { ...data.plan, databaseOptions },
+      }),
   );
   port.postMessage(response);
   port.close();
 }
 
-async function runColdMutationWorker(
-  port: MessagePort,
-  data: SessionColdWorkerData,
-  coordination: SqliteMutationWorkerCoordination,
-) {
+async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
   const { reclaimSqliteFreePages } = await import("./session-history-archive-pruning.js");
@@ -122,75 +113,66 @@ async function runColdMutationWorker(
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
-  let nativeSettled = false;
-  return runSqliteColdMutationLifecyclePhase(
-    coordination,
-    async () => {
-      try {
-        result = await withWorkerWriteAdmission(
-          port,
-          0,
-          data.plan.databaseOptions,
-          async (openedDatabase) => {
-            let transactionDatabase: DatabaseSync | undefined;
-            try {
-              const changed = mutateSessionColdTranscriptInWorker(
-                data.plan,
-                coldRecords,
-                (database) => {
-                  transactionDatabase = database.db;
-                  waitForSqliteReclamationCommit(commitGate, () =>
-                    port.postMessage({ type: "commit-request", operationId: 0 }),
-                  );
-                },
+  try {
+    result = await withWorkerWriteAdmission(
+      port,
+      0,
+      data.plan.databaseOptions,
+      async (openedDatabase) => {
+        let transactionDatabase: DatabaseSync | undefined;
+        try {
+          const changed = mutateSessionColdTranscriptInWorker(
+            data.plan,
+            coldRecords,
+            (database) => {
+              transactionDatabase = database.db;
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request", operationId: 0 }),
               );
-              waitForSqliteReclamationParentRelease(commitGate);
-              if (data.plan.kind !== "cold-restore") {
-                await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
-              }
-              return changed;
-            } finally {
-              validation = getOpenClawAgentDatabaseValidation(openedDatabase);
-              if (
-                transactionDatabase &&
-                (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-              ) {
-                markSqliteReclamationSettled(commitGate);
-              }
-            }
-          },
-        );
-      } catch (error) {
-        const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-        nativeSettled = cleanup.settled;
-        if (cleanup.settled) {
-          markSqliteReclamationSettled(commitGate);
-        } else {
-          throw new AggregateError(
-            [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
-            "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
-            { cause: error },
+            },
           );
+          waitForSqliteReclamationParentRelease(commitGate);
+          if (data.plan.kind !== "cold-restore") {
+            await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
+          }
+          return changed;
+        } finally {
+          validation = getOpenClawAgentDatabaseValidation(openedDatabase);
+          if (
+            transactionDatabase &&
+            (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+          ) {
+            markSqliteReclamationSettled(commitGate);
+          }
         }
-        throw error;
-      }
-      const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-      nativeSettled = cleanup.settled;
-      const workerResult = {
-        result,
-        ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
-        ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
-      };
-      return {
-        type: "reclaimed",
-        operationId: 0,
-        result: workerResult,
-        settled: true,
-        validation: cleanup.settled ? validation : undefined,
-      } satisfies SqliteMutationWorkerMessage<typeof workerResult>;
-    },
-    () => nativeSettled,
-  );
+      },
+    );
+  } catch (error) {
+    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+    if (cleanup.settled) {
+      markSqliteReclamationSettled(commitGate);
+    } else {
+      throw new AggregateError(
+        [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
+        "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+  const workerResult = {
+    result,
+    ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
+    ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
+  };
+  return {
+    type: "reclaimed",
+    operationId: 0,
+    result: workerResult,
+    settled: true,
+    validation: cleanup.settled ? validation : undefined,
+  } satisfies SqliteMutationWorkerMessage<typeof workerResult>;
 }
 
 export async function runReclamationWorkerPort(

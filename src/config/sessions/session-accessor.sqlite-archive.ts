@@ -100,14 +100,11 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
             exitCode = code;
           },
           dispatch: () =>
-            worker.postMessage({ type: "mutate", coordination }, [
-              ...(coordination.stateLifecycle ? [coordination.stateLifecycle] : []),
-              ...(coordination.reconciliation
-                ? [coordination.reconciliation.open, coordination.reconciliation.close]
-                : []),
-            ]),
+            worker.postMessage(
+              { type: "mutate", coordination },
+              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
+            ),
         }),
-      "reconciliation",
     ).then((result) => [result]);
     const observe = (outcome: "resolved" | "rejected") => {
       const elapsedMs = Math.round(performance.now() - startedAt);
