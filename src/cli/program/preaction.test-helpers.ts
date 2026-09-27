@@ -128,6 +128,15 @@ export function registerNativeExecutorPreActionTests(
 }
 
 export function registerPreActionCommandFixtures(programLocal: Command): void {
+  programLocal
+    .command("infer")
+    .alias("capability")
+    .command("model")
+    .command("run")
+    .option("--gateway", "use the Gateway transport", false)
+    .option("--local", "use local transport", false)
+    .option("--prompt <text>")
+    .action(() => {});
   const agent = programLocal
     .command("agent")
     .argument("[note]")

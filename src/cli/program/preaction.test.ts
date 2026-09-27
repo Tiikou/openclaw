@@ -22,6 +22,7 @@ type EnsureConfigReadyOptions = {
   requireConfig?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
+  validateConfigOnly?: boolean;
 };
 const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
   async () => {},
@@ -853,6 +854,61 @@ describe("registerPreActionHooks", () => {
       suppressDoctorStdout: true,
       validateConfigOnly: true,
     });
+  });
+
+  it.each(["infer", "capability"])(
+    "validates config without client-side state startup for Gateway model runs via %s",
+    async (commandName) => {
+      const parseProgram = buildProgram();
+      process.argv = [
+        "node",
+        "openclaw",
+        commandName,
+        "model",
+        "run",
+        "--gateway",
+        "--prompt",
+        "synthetic",
+      ];
+
+      await parseProgram.parseAsync(process.argv);
+
+      expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+      expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandPath: ["infer", "model", "run"],
+          validateConfigOnly: true,
+        }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "default local transport",
+      argv: ["infer", "model", "run", "--prompt", "synthetic"],
+    },
+    {
+      name: "explicit local transport",
+      argv: ["infer", "model", "run", "--local", "--prompt", "synthetic"],
+    },
+    {
+      name: "gateway-looking prompt value",
+      argv: ["infer", "model", "run", "--prompt=--gateway"],
+    },
+    {
+      name: "conflicting local and gateway flags",
+      argv: ["infer", "model", "run", "--local", "--gateway", "--prompt", "synthetic"],
+    },
+  ])("keeps stateful preflight for $name", async ({ argv }) => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", ...argv];
+
+    await parseProgram.parseAsync(process.argv);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+    const bootstrap = ensureConfigReadyMock.mock.calls.at(-1)?.[0];
+    expect(bootstrap?.validateConfigOnly).not.toBe(true);
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {

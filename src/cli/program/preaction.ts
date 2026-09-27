@@ -161,7 +161,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       nativeUpdateExecutorCheck || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const startupPolicy = resolveCliStartupPolicy({
+    const resolvedStartupPolicy = resolveCliStartupPolicy({
       argv,
       commandPath,
       jsonOutputMode,
@@ -169,6 +169,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       env: process.env,
       nativeUpdateExecutorCheck,
     });
+    // `model run --gateway` delegates execution to the already-running Gateway.
+    // Keep config validation, but let the Gateway own migrations and other stateful
+    // startup work. Read parsed leaf options so prompt text cannot select this path.
+    const modelRunOptions = actionCommand.opts<{ gateway?: boolean; local?: boolean }>();
+    const startupPolicy =
+      commandPath.length === 3 &&
+      commandPath[0] === "infer" &&
+      commandPath[1] === "model" &&
+      commandPath[2] === "run" &&
+      modelRunOptions.gateway === true &&
+      modelRunOptions.local !== true
+        ? { ...resolvedStartupPolicy, validateConfigOnly: true }
+        : resolvedStartupPolicy;
     await applyCliExecutionStartupPresentation({
       startupPolicy,
       version: programVersion,
