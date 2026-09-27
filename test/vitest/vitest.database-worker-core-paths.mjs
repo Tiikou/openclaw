@@ -500,6 +500,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/node-pairing-migration.test.ts",
   "src/infra/push-apns.store.test.ts",
   "src/infra/outbound/delivery-queue-platform-lease.worker.test.ts",
+  "src/infra/sqlite-worker-closed-actor.test.ts",
   "src/infra/sqlite-worker-existing-schema.test.ts",
   "src/state/openclaw-state-read.existing-schema.test.ts",
   "src/infra/session-cost-usage-metadata.test.ts",
