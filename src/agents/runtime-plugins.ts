@@ -13,6 +13,7 @@ import {
   captureRuntimeChannelSource,
 } from "../plugins/channel-registry-adoption.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { adoptRuntimeTypedHookRegistrations } from "../plugins/hook-registry-adoption.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
   acquirePluginRegistryForInspection,
@@ -177,13 +178,14 @@ function adoptAgentRuntimeRegistrations(
   if (!activeRegistry) {
     return { registry: channelRegistry };
   }
+  const hookRegistry = adoptRuntimeTypedHookRegistrations(channelRegistry, activeRegistry);
   const memoryRegistry =
     params.metadataSnapshot &&
     params.workspaceDir &&
     config &&
     getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(channelRegistry, activeRegistry, config)
-      : channelRegistry;
+      ? adoptRuntimeMemoryRegistrations(hookRegistry, activeRegistry, config)
+      : hookRegistry;
   const registry = bindPluginRegistryResourceOwner(
     adoptRuntimeWidgetPresenterRegistrations(
       adoptRuntimeContextEngineRegistrations(

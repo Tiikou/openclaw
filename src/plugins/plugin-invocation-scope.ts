@@ -150,6 +150,12 @@ export function collectRegistryInvocationInstances(
       instances.add(instance);
     }
   }
+  for (const entry of registry.typedHooks) {
+    const instance = entry.borrowedRuntimeRecord && getPluginInstance(entry.borrowedRuntimeRecord);
+    if (instance) {
+      instances.add(instance);
+    }
+  }
   const values = [
     ...registry.channels.map(({ plugin }) => plugin),
     ...[...registry.contextEngines.values()].map(({ factory }) => factory),
