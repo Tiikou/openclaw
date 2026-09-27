@@ -400,7 +400,7 @@ export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
-  typedHooks: TypedPluginHookRegistration[];
+  typedHooks: (TypedPluginHookRegistration & { borrowedRuntimeRecord?: PluginRecord })[];
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];

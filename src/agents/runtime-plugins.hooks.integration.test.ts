@@ -92,10 +92,10 @@ it("borrows a live plugin's typed hooks into a separate agent workspace exactly 
     "llm_input",
   ]);
   expect(
-    prepared.plugins.map((plugin) => ({
-      id: plugin.id,
-      status: plugin.status,
-      source: plugin.source,
+    prepared.plugins.map((record) => ({
+      id: record.id,
+      status: record.status,
+      source: record.source,
     })),
   ).toEqual(expect.arrayContaining([expect.objectContaining({ id: plugin.id, status: "loaded" })]));
   expect(prepared.typedHooks.map((hook) => hook.hookName)).toEqual([
@@ -107,7 +107,9 @@ it("borrows a live plugin's typed hooks into a separate agent workspace exactly 
     { metadataSnapshot, pluginRegistry: prepared },
     async () => {
       const runner = getGlobalHookRunner();
-      if (!runner) throw new Error("Expected the global hook runner to be initialized");
+      if (!runner) {
+        throw new Error("Expected the global hook runner to be initialized");
+      }
       const ctx = { agentId: "georgia-content", sessionId: "writer-session" };
       const denied = await runner.runBeforeAgentRun(
         { senderId: "stranger", prompt: "write", messages: [] },

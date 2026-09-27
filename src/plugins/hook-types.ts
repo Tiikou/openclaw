@@ -1232,8 +1232,6 @@ export type PluginHookHandlerMap = {
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
   pluginId: string;
-  /** Live instance retained when a prepared discovery registry borrows this hook. */
-  borrowedRuntimeRecord?: import("./registry-types.js").PluginRecord;
   registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
