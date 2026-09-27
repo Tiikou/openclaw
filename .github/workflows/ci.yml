@@ -2779,6 +2779,42 @@ jobs:
           done
           exit "$failures"
 
+      # Temporary fork-only artifact export for an exact-SHA controlled install.
+      - name: Package exact PR1 runtime artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'pr1-artifact-20260927'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          jq -e --arg sha "$EXPECTED_SHA" '.commit == $sha' dist/build-info.json >/dev/null
+          roots=(
+            dist dist-runtime
+            packages/acp-core/dist packages/agent-core/dist packages/ai/dist
+            packages/gateway-client/dist packages/gateway-protocol/dist
+            packages/llm-core/dist packages/markdown-core/dist packages/media-core/dist
+            packages/media-generation-core/dist packages/media-understanding-common/dist
+            packages/model-catalog-core/dist packages/net-policy/dist
+            packages/normalization-core/dist packages/retry/dist packages/terminal-core/dist
+          )
+          for root in "${roots[@]}"; do test -d "$root"; done
+          tar -czf "$RUNNER_TEMP/openclaw-pr1-runtime.tar.gz" "${roots[@]}"
+          sha256sum "$RUNNER_TEMP/openclaw-pr1-runtime.tar.gz" > "$RUNNER_TEMP/openclaw-pr1-runtime.tar.gz.sha256"
+          cat "$RUNNER_TEMP/openclaw-pr1-runtime.tar.gz.sha256"
+
+      - name: Upload exact PR1 runtime artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'pr1-artifact-20260927'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr1-runtime-${{ inputs.target_ref }}
+          path: |
+            ${{ runner.temp }}/openclaw-pr1-runtime.tar.gz
+            ${{ runner.temp }}/openclaw-pr1-runtime.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload Discord component attachment proof
         if: always() && needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
