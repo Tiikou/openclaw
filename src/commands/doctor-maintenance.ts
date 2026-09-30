@@ -133,7 +133,11 @@ export async function beginDoctorMaintenance(params: {
     let stateOwner;
     try {
       params.assertCurrent?.();
-      stateOwner = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 });
+      stateOwner = acquireStateDatabaseCoordinator({
+        databasePath,
+        busyTimeoutMs: 250,
+        operation: "doctor-maintenance",
+      });
     } catch (error) {
       owner.release();
       throw error;

@@ -235,6 +235,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           databasePath: preparation.databasePath,
           deadlineNs: preparation.deadlineNs,
           runtime: context.coordinatorRuntime,
+          diagnosticContext: {
+            actor: `${request.actor}:${request.id}`,
+            requestId: request.id,
+            command:
+              isRecord(command) && typeof command.type === "string" ? command.type : undefined,
+          },
           onUnsettled: () => {
             retire = true;
           },
@@ -276,6 +282,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           throw error;
         }
       };
+      let operationOutcome: "returned" | "threw" = "threw";
       try {
         // SAFETY: The broker serialized a command from this actor's typed store contract.
         const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
@@ -334,7 +341,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             verified ? "completed" : "unknown",
           );
         }
+        operationOutcome = "returned";
       } finally {
+        coordinator?.recordOperationOutcome?.(retire ? "retained-unsettled" : operationOutcome);
         // No write-capable continuation may outlive this lease. A failed
         // settlement retains the native owner until the broker joins worker exit.
         if (coordinator && !retire) {

@@ -67,7 +67,11 @@ async function perform<T>(
       participant.paused = true;
       assertActive();
     }
-    lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+    lifecycle = acquireStateDatabaseCoordinator({
+      databasePath,
+      busyTimeoutMs: 0,
+      operation: "lease-exclusion",
+    });
     for (const participant of participants) {
       participant.expiresAt = participant.owner.params.readExpiry(databasePath);
     }
@@ -184,6 +188,7 @@ async function perform<T>(
     errors.push(error);
     distrustCanonical(new Error("state lease reopen refused", { cause: error }));
   } finally {
+    lifecycle?.recordOperationOutcome?.(errors.length > 0 ? "threw" : "returned");
     try {
       lifecycle?.release();
     } catch (error) {

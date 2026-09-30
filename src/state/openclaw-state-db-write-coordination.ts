@@ -38,6 +38,7 @@ export function withSharedStateWriteCoordinator<T>(
   let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator>;
   try {
     coordinator = acquireStateDatabaseCoordinator({
+      operation: "state-write",
       databasePath: params.databasePath,
       busyTimeoutMs:
         params.busyTimeoutMs ??

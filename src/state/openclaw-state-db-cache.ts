@@ -455,6 +455,7 @@ function retireOpenClawStateDatabaseHandle(
   const coordinator =
     borrowedOwner?.closeCoordinator ??
     acquireStateDatabaseCoordinator({
+      operation: retireAdmission ? "explicit-retirement" : "idle-retirement",
       databasePath: database.path,
       busyTimeoutMs,
       // Retirement releases physical custody, including an idle coordinator that
@@ -635,7 +636,11 @@ export async function acquireOpenClawStateDatabaseFileExclusion(pathname: string
     // The admission seal spans drainage and acquisition; no worker can reopen
     // between native retirement and the physical exclusion becoming current.
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+    lifecycle = acquireStateDatabaseCoordinator({
+      databasePath,
+      busyTimeoutMs: 0,
+      operation: "file-exclusion",
+    });
     handles = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
   } catch (error) {
     lifecycle?.release();

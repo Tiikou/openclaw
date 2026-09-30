@@ -416,6 +416,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   const env = params.env ?? process.env;
   // Keep one owner through filesystem moves, receipt completion, and backup retirement.
   const coordinator = acquireStateDatabaseCoordinator({
+    operation: "doctor-skill-workshop",
     databasePath: resolveOpenClawStateSqlitePath(env),
   });
   try {

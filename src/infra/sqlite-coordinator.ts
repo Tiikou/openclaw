@@ -51,7 +51,10 @@ export function throwSqliteLifecycleErrors(errors: unknown[], message: string): 
 }
 
 export function runWithSqliteCoordinator<T>(
-  coordinator: { release: () => void },
+  coordinator: {
+    release: () => void;
+    recordOperationOutcome?: (outcome: "returned" | "threw") => void;
+  },
   operationLabel: string,
   operation: () => T,
 ): T {
@@ -62,6 +65,7 @@ export function runWithSqliteCoordinator<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
+    coordinator.recordOperationOutcome?.("threw");
     let releaseFailed = false;
     let releaseError: unknown;
     try {
@@ -79,6 +83,7 @@ export function runWithSqliteCoordinator<T>(
     }
     throw operationError;
   }
+  coordinator.recordOperationOutcome?.("returned");
   try {
     coordinator.release();
   } catch (releaseError) {

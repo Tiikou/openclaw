@@ -62,6 +62,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
             acquireStateDatabaseCoordinator({
               databasePath: params.databasePath,
               busyTimeoutMs: 0,
+              operation: params.operation,
             }),
           );
         } catch (error) {
