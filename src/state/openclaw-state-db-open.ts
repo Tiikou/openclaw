@@ -131,6 +131,7 @@ export function openUnpublishedStateDatabase(params: {
           runMaintenance: (operation) =>
             runWithSqliteCoordinator(
               acquireStateDatabaseCoordinator({
+                operation: "wal-maintenance",
                 databasePath: params.pathname,
                 runtimeDirectory,
                 busyTimeoutMs: STATE_WAL_COORDINATOR_WAIT_MS,

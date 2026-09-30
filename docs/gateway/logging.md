@@ -91,6 +91,45 @@ subprocess stdout or stderr, so a successful read keeps its result and a failed
 update retains its original error detail. Existing required-cleanup failures
 remain errors.
 
+### SQLite lifecycle lock diagnostics
+
+For a bounded investigation, `OPENCLAW_DIAGNOSTICS=sqlite.lifecycle` enables
+`state lifecycle lock` records from `state/coordinator` at `info`. This flag
+uses the environment diagnostic selector; file logging must include `info`.
+Leave it disabled outside the investigation. It adds observations around the
+existing lock, without changing admission, retries, timeouts, or cleanup.
+
+Records identify a fixed `operation`, a random `referenceId`, a fingerprint
+`lockId`, and the emitting `pid`, `threadId`, and `isMainThread`. Native and
+reentrant acquisitions share `ownerId`. `reference_released` ends a logical
+reference; only the native owner's `released` or `release_failed` record reports
+the final custody boundary. `closed` includes handing a handle back to the
+existing pool, and does not assert that the physical file descriptor closed.
+Delegated records describe borrowed authority, not another native acquisition.
+
+`acquiredAt` and `observedAt` are wall-clock milliseconds. `acquiredMonoNs` and
+`observedMonoNs` use the host monotonic clock; `holdMs` uses monotonic elapsed
+time. Join an `acquire_failed` waiter to native holder intervals with the same
+`lockId` and overlapping monotonic timestamps. The contention error includes
+the waiter's `diagnosticId` for this join. When available, the existing kernel
+owner probe supplies `blockingPid` and `blockingStartTime`. This allows a
+same-process Worker holder to be distinguished from its idle-retirement waiter.
+
+`operation_settled` records `returned`, `threw`, `cancelled`, or
+`retained-unsettled` where the caller observes settlement. Release records carry
+the last observed `operationOutcome`; its absence means settlement was not
+observed, rather than success. Existing trusted trace context is retained.
+Optional `actorHash`, `commandHash`, and `requestHash` fingerprint internal
+worker bindings and command types; raw session keys, paths, payloads, prompts,
+credentials, cancellation reasons, and exception messages are not added.
+
+Enable capture before the holder acquires its lock and collect logs from all
+participating processes and Workers. `omittedObservations` reports synchronous
+diagnostic failures on the next successful record. Process exit, asynchronous
+log loss, rotation, or a missing acquisition record can leave incomplete
+intervals; missing release evidence alone does not prove a stuck lock.
+Disable the selector after obtaining a complete holder/waiter cycle.
+
 ### Slow agent database opens
 
 A completed physical agent-database open taking at least one second emits

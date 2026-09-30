@@ -4,7 +4,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
 
-type DelegateIdentity = { actorId: string; coordinatorPath: string };
+type DelegateIdentity = {
+  actorId: string;
+  coordinatorPath: string;
+  diagnosticOwnerId?: string;
+};
 
 export function createCoordinatorDelegate(
   identity: DelegateIdentity,
@@ -49,6 +53,7 @@ export async function attachCoordinatorDelegate(
   label: string,
 ) {
   let closed = false;
+  let diagnosticOwnerId: string | undefined;
   port.once("close", () => {
     closed = true;
   });
@@ -71,6 +76,13 @@ export async function attachCoordinatorDelegate(
         reject(new SqliteCoordinatorError(`${label} does not match its actor`));
         return;
       }
+      // This optional observation never participates in authority validation.
+      if (
+        typeof message.diagnosticOwnerId === "string" &&
+        /^[a-f0-9-]{36}$/.test(message.diagnosticOwnerId)
+      ) {
+        diagnosticOwnerId = message.diagnosticOwnerId;
+      }
       resolve(new Int32Array(message.live));
     };
     port.once("close", onClose);
@@ -82,6 +94,7 @@ export async function attachCoordinatorDelegate(
   });
   port.unref();
   return {
+    diagnosticOwnerId,
     assertCurrent(this: void) {
       if (closed || Atomics.load(live, 0) !== 1) {
         throw new SqliteCoordinatorError(`${label} is no longer current`);
@@ -96,7 +109,10 @@ export async function attachCoordinatorDelegate(
 
 const lifecycleScopes = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseLifecycleDelegateScopes"),
-  () => new AsyncLocalStorage<ReadonlyMap<string, { active: boolean; assertCurrent(): void }>>(),
+  () =>
+    new AsyncLocalStorage<
+      ReadonlyMap<string, { active: boolean; assertCurrent(): void; diagnosticOwnerId?: string }>
+    >(),
 );
 
 export function acquireDelegatedLifecycleCoordinator(coordinatorPath: string) {
@@ -111,6 +127,7 @@ export function acquireDelegatedLifecycleCoordinator(coordinatorPath: string) {
   let closed = false;
   return {
     path: coordinatorPath,
+    diagnosticOwnerId: delegate.diagnosticOwnerId,
     get closed() {
       return closed;
     },
@@ -127,7 +144,11 @@ export async function attachLifecycleCoordinatorDelegate(
   const delegate = await attachCoordinatorDelegate(port, identity, "State lifecycle delegate");
   return {
     run<T>(operation: () => T): T {
-      const scope = { active: true, assertCurrent: delegate.assertCurrent };
+      const scope = {
+        active: true,
+        assertCurrent: delegate.assertCurrent,
+        diagnosticOwnerId: delegate.diagnosticOwnerId,
+      };
       const scopes = new Map(lifecycleScopes.getStore());
       scopes.set(identity.coordinatorPath, scope);
       const settled = () => {

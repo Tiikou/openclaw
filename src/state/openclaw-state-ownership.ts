@@ -204,6 +204,7 @@ function inspectOwnershipWhileCoordinatorHeld(
 
 function acquireOpenClawStateOwnershipCoordinator(databasePath: string, busyTimeoutMs: number) {
   return acquireStateDatabaseCoordinator({
+    operation: "ownership",
     databasePath,
     busyTimeoutMs,
   });

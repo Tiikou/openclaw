@@ -7,6 +7,7 @@ import {
   SqliteCoordinatorError,
   createSqliteLifecycleAggregateError,
 } from "./sqlite-coordinator.js";
+import type { StateLifecycleDiagnosticContext } from "./state-database-coordinator-diagnostics.js";
 import {
   acquireStateDatabaseCoordinator,
   StateDatabaseCoordinatorContentionError,
@@ -97,6 +98,7 @@ export async function acquireSqliteWorkerLifecycle(params: {
   deadlineNs: bigint;
   runtime: StateDatabaseCoordinatorRuntime;
   onUnsettled(): void;
+  diagnosticContext?: StateLifecycleDiagnosticContext;
 }) {
   const controller = new AbortController();
   let waiting: ReturnType<typeof createDeferredCore<MessagePort | undefined>> | undefined;
@@ -145,7 +147,12 @@ export async function acquireSqliteWorkerLifecycle(params: {
         await check("check");
         controller.signal.throwIfAborted();
         return withStateDatabaseCoordinatorRuntimeDirectory(params.runtime, () =>
-          acquireStateDatabaseCoordinator({ databasePath: params.databasePath, busyTimeoutMs: 0 }),
+          acquireStateDatabaseCoordinator({
+            databasePath: params.databasePath,
+            busyTimeoutMs: 0,
+            operation: "mutation-worker-admission",
+            diagnosticContext: params.diagnosticContext,
+          }),
         );
       },
     });
@@ -156,6 +163,7 @@ export async function acquireSqliteWorkerLifecycle(params: {
     return { coordinator: held, admission };
   } catch (error) {
     try {
+      coordinator?.recordOperationOutcome?.(controller.signal.aborted ? "cancelled" : "threw");
       coordinator?.release();
     } catch (cleanupError) {
       params.onUnsettled();

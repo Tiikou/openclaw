@@ -98,6 +98,7 @@ export function acquireDeviceIdentityCoordinator(params: DeviceIdentityCoordinat
     // The external lifecycle coordinator remains stable while cleanup detaches state-local locks.
     coordinators.push(
       acquireStateDatabaseCoordinator({
+        operation: "device-identity",
         databasePath: params.databasePath,
         coordinatorPath: stateCoordinatorPath,
         busyTimeoutMs: timeout,

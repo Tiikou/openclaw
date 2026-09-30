@@ -42,7 +42,11 @@ it("retries native acquisition, retaining one deadline and the original physical
   await vi.advanceTimersByTimeAsync(25);
   expect(await pending).toBe(lease);
   expect(acquire).toHaveBeenCalledTimes(2);
-  expect(acquire).toHaveBeenLastCalledWith({ databasePath: params.databasePath, busyTimeoutMs: 0 });
+  expect(acquire).toHaveBeenLastCalledWith({
+    databasePath: params.databasePath,
+    busyTimeoutMs: 0,
+    operation: "session-admission",
+  });
   expect(params.assertCurrent).toHaveBeenCalledTimes(2);
 });
 

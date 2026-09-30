@@ -21,6 +21,12 @@ import {
   acquireDelegatedLifecycleCoordinator,
 } from "./state-database-coordinator-delegate.js";
 import {
+  startStateLifecycleDiagnostic,
+  type StateLifecycleDiagnostic,
+  type StateLifecycleOperation,
+  type StateLifecycleDiagnosticContext,
+} from "./state-database-coordinator-diagnostics.js";
+import {
   StateDatabaseCoordinatorContentionError,
   StateSchemaMutationConflictError,
 } from "./state-database-coordinator-errors.js";
@@ -42,6 +48,7 @@ type HeldCoordinator = {
   keepAlive: boolean;
   gatewayOwners: number;
   gatewayDelegates: Set<Int32Array>;
+  diagnostic?: StateLifecycleDiagnostic;
 };
 
 type SourceReadScope = {
@@ -77,6 +84,8 @@ type CoordinatorOptions = {
   uid?: number;
   busyTimeoutMs?: number;
   keepAlive?: boolean;
+  operation?: StateLifecycleOperation;
+  diagnosticContext?: StateLifecycleDiagnosticContext;
 };
 
 type StateDatabaseCoordinatorLease = {
@@ -84,6 +93,9 @@ type StateDatabaseCoordinatorLease = {
   // A remaining reference can accept custody without closing the native handle.
   readonly closed: boolean;
   release: () => void;
+  recordOperationOutcome?: (
+    outcome: "returned" | "threw" | "cancelled" | "retained-unsettled",
+  ) => void;
 };
 
 export function resolveStateLifecycleRuntimeDirectory(): string {
@@ -133,88 +145,151 @@ function acquireLifecycleCoordinator(
       runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
       uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
     });
-  if (family === "state-lifecycle") {
-    const delegate = acquireDelegatedLifecycleCoordinator(coordinatorPath);
-    if (delegate) {
-      return delegate;
-    }
-  }
-  let held = heldCoordinators.get(coordinatorPath);
-  if (held) {
-    if (held.references === 0) {
-      throw new SqliteCoordinatorError(
-        `${family} coordinator cleanup is pending; retry its close before reacquiring`,
-      );
-    }
-    held.references += 1;
-    held.keepAlive &&= keepAlive;
-  } else {
-    ensurePrivateSqliteCoordinatorDirectory(path.dirname(coordinatorPath), `${family} coordinator`);
-    const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
-      busyTimeoutMs: params.busyTimeoutMs,
-      keepAlive,
-    });
-    if (!coordinator) {
-      throw new StateDatabaseCoordinatorContentionError(
-        family,
-        readStateDatabaseCoordinatorOwner(coordinatorPath, family),
-      );
-    }
-    held = {
-      coordinator,
-      references: 1,
-      keepAlive,
-      gatewayOwners: 0,
-      gatewayDelegates: new Set(),
-    };
-    heldCoordinators.set(coordinatorPath, held);
-  }
-  if (gatewayOwner) {
-    held.gatewayOwners += 1;
-  }
-
-  const owner = held;
-  let relinquished = false;
-  let settled = false;
-  return {
-    path: coordinatorPath,
-    get closed() {
-      return settled || (relinquished && owner.coordinator.closed);
-    },
-    release: () => {
-      if (settled) {
-        return;
+  const diagnostic =
+    family === "state-lifecycle"
+      ? startStateLifecycleDiagnostic(coordinatorPath, params.operation, params.diagnosticContext)
+      : undefined;
+  try {
+    if (family === "state-lifecycle") {
+      const delegate = acquireDelegatedLifecycleCoordinator(coordinatorPath);
+      if (delegate) {
+        diagnostic?.acquired("delegated", delegate.diagnosticOwnerId);
+        return {
+          ...delegate,
+          get closed() {
+            return delegate.closed;
+          },
+          recordOperationOutcome: (outcome) => diagnostic?.emit("operation_settled", { outcome }),
+          release() {
+            const closed = delegate.closed;
+            try {
+              delegate.release();
+            } catch (error) {
+              diagnostic?.emit("release_failed", { mode: "delegated", closed: delegate.closed });
+              throw error;
+            }
+            if (!closed) {
+              diagnostic?.emit("released", { mode: "delegated", closed: delegate.closed });
+            }
+          },
+        };
       }
-      if (!relinquished) {
-        relinquished = true;
-        if (gatewayOwner) {
-          owner.gatewayOwners -= 1;
-          if (owner.gatewayOwners === 0) {
-            for (const delegate of owner.gatewayDelegates) {
-              Atomics.store(delegate, 0, 0);
+    }
+    let held = heldCoordinators.get(coordinatorPath);
+    if (held) {
+      if (held.references === 0) {
+        throw new SqliteCoordinatorError(
+          `${family} coordinator cleanup is pending; retry its close before reacquiring`,
+        );
+      }
+      held.references += 1;
+      held.keepAlive &&= keepAlive;
+    } else {
+      ensurePrivateSqliteCoordinatorDirectory(
+        path.dirname(coordinatorPath),
+        `${family} coordinator`,
+      );
+      const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
+        busyTimeoutMs: params.busyTimeoutMs,
+        keepAlive,
+      });
+      if (!coordinator) {
+        throw new StateDatabaseCoordinatorContentionError(
+          family,
+          readStateDatabaseCoordinatorOwner(coordinatorPath, family),
+          diagnostic?.id,
+        );
+      }
+      held = {
+        coordinator,
+        references: 1,
+        keepAlive,
+        gatewayOwners: 0,
+        gatewayDelegates: new Set(),
+        diagnostic,
+      };
+      heldCoordinators.set(coordinatorPath, held);
+    }
+    if (gatewayOwner) {
+      held.gatewayOwners += 1;
+    }
+
+    const owner = held;
+    diagnostic?.acquired(
+      owner.diagnostic === diagnostic ? "native" : "reentrant",
+      owner.diagnostic?.id,
+      owner.references,
+    );
+    let relinquished = false;
+    let settled = false;
+    return {
+      path: coordinatorPath,
+      recordOperationOutcome: (outcome) =>
+        diagnostic?.emit("operation_settled", { ownerId: owner.diagnostic?.id, outcome }),
+      get closed() {
+        return settled || (relinquished && owner.coordinator.closed);
+      },
+      release: () => {
+        if (settled) {
+          return;
+        }
+        if (!relinquished) {
+          relinquished = true;
+          if (gatewayOwner) {
+            owner.gatewayOwners -= 1;
+            if (owner.gatewayOwners === 0) {
+              for (const delegate of owner.gatewayDelegates) {
+                Atomics.store(delegate, 0, 0);
+              }
+            }
+          }
+          owner.references -= 1;
+          diagnostic?.emit("reference_released", {
+            ownerId: owner.diagnostic?.id,
+            references: owner.references,
+          });
+        }
+        if (owner.references > 0) {
+          settled = true;
+          return;
+        }
+        let failed = false;
+        try {
+          owner.coordinator.release(owner.keepAlive ? undefined : { keepAlive: false });
+        } catch (error) {
+          failed = true;
+          throw new SqliteCoordinatorError(`failed to release ${family} coordinator`, error);
+        } finally {
+          owner.diagnostic?.emit(failed ? "release_failed" : "released", {
+            ownerId: owner.diagnostic.id,
+            lastReferenceId: diagnostic?.id,
+            closed: owner.coordinator.closed,
+            references: owner.references,
+            outcome: owner.coordinator.closed
+              ? failed
+                ? "closed-with-error"
+                : "closed"
+              : "custody-pending",
+          });
+          if (owner.coordinator.closed) {
+            settled = true;
+            if (heldCoordinators.get(coordinatorPath) === owner) {
+              heldCoordinators.delete(coordinatorPath);
             }
           }
         }
-        owner.references -= 1;
-      }
-      if (owner.references > 0) {
-        settled = true;
-        return;
-      }
-      try {
-        owner.coordinator.release(owner.keepAlive ? undefined : { keepAlive: false });
-      } catch (error) {
-        throw new SqliteCoordinatorError(`failed to release ${family} coordinator`, error);
-      } finally {
-        if (owner.coordinator.closed) {
-          settled = true;
-          if (heldCoordinators.get(coordinatorPath) === owner) {
-            heldCoordinators.delete(coordinatorPath);
-          }
-        }
-      }
-    },
-  };
+      },
+    };
+  } catch (error) {
+    const blocking =
+      error instanceof StateDatabaseCoordinatorContentionError ? error.blockingOwner : undefined;
+    diagnostic?.emit("acquire_failed", {
+      outcome: error instanceof StateDatabaseCoordinatorContentionError ? "contention" : "error",
+      blockingPid: blocking?.pid,
+      blockingStartTime: blocking?.startTime,
+    });
+    throw error;
+  }
 }
 
 export function acquireGatewayLifecycleCoordinator(params: CoordinatorOptions) {
@@ -368,11 +443,19 @@ export function tryCreateStateLifecycleDelegate(
   if (!heldCoordinators.has(coordinatorPath)) {
     return undefined;
   }
-  const retained = acquireStateDatabaseCoordinator({ databasePath: params.databasePath });
+  const retained = acquireStateDatabaseCoordinator({
+    databasePath: params.databasePath,
+    operation: "worker-delegate",
+    diagnosticContext: { actor: params.actorId },
+  });
   const live = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   Atomics.store(live, 0, 1);
   return createCoordinatorDelegate(
-    { actorId: params.actorId, coordinatorPath },
+    {
+      actorId: params.actorId,
+      coordinatorPath,
+      diagnosticOwnerId: heldCoordinators.get(coordinatorPath)?.diagnostic?.id,
+    },
     live,
     retained,
     () => {
@@ -403,7 +486,11 @@ export function retainHeldStateDatabaseCoordinator(databasePath: string) {
     uid: typeof process.getuid === "function" ? process.getuid() : undefined,
   });
   return heldCoordinators.has(pathname)
-    ? acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 })
+    ? acquireStateDatabaseCoordinator({
+        databasePath,
+        busyTimeoutMs: 0,
+        operation: "worker-retain",
+      })
     : undefined;
 }
 

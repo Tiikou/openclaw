@@ -10,9 +10,10 @@ export const StateDatabaseCoordinatorContentionError = resolveGlobalSingleton(
       constructor(
         readonly family: CoordinatorFamily,
         readonly blockingOwner?: StateDatabaseCoordinatorOwner,
+        readonly diagnosticId?: string,
       ) {
         super(
-          `another OpenClaw process owns ${family}${blockingOwner ? ` holder=${JSON.stringify(blockingOwner)}` : ""}`,
+          `another OpenClaw process owns ${family}${blockingOwner ? ` holder=${JSON.stringify(blockingOwner)}` : ""}${diagnosticId ? ` diagnosticId=${diagnosticId}` : ""}`,
         );
         this.name = "StateDatabaseCoordinatorContentionError";
       }

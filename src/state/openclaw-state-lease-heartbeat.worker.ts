@@ -47,7 +47,11 @@ function withLifecycleCoordinator<T>(label: string, operation: () => T): T {
     params.parentCoordinatorRetained
       ? operation()
       : runWithSqliteCoordinator(
-          acquireStateDatabaseCoordinator({ databasePath: params.path, busyTimeoutMs: 0 }),
+          acquireStateDatabaseCoordinator({
+            databasePath: params.path,
+            busyTimeoutMs: 0,
+            operation: "lease-heartbeat",
+          }),
           label,
           operation,
         );
