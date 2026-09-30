@@ -2,6 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { MessageChannel, Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -52,6 +53,22 @@ function fixture() {
   return { databasePath: path.join(root, "private-state.sqlite"), runtimeDirectory: root };
 }
 
+function observation(index: number): Record<string, unknown> {
+  const record = records.at(index);
+  if (!record) {
+    throw new Error(`Missing lifecycle fixture observation ${index}`);
+  }
+  return record;
+}
+
+function phaseRecord(rows: Record<string, unknown>[], phase: string): Record<string, unknown> {
+  const record = rows.find((row) => row.phase === phase);
+  if (!record) {
+    throw new Error(`Missing lifecycle fixture phase ${phase}`);
+  }
+  return record;
+}
+
 it("records normal native ownership, operation outcome and final release without warnings", () => {
   const params = fixture();
   const lease = acquireStateDatabaseCoordinator({ ...params, operation: "state-write" });
@@ -62,7 +79,9 @@ it("records normal native ownership, operation outcome and final release without
     "reference_released",
     "released",
   ]);
-  const [acquired, settled, , released] = records;
+  const acquired = observation(0);
+  const settled = observation(1);
+  const released = observation(3);
   expect(acquired).toMatchObject({ mode: "native", operation: "state-write", references: 1 });
   expect(settled.outcome).toBe("returned");
   expect(released).toMatchObject({
@@ -79,7 +98,7 @@ it("distinguishes a relinquished reference from the final native owner", () => {
   const params = fixture();
   const first = acquireStateDatabaseCoordinator({ ...params, operation: "state-write" });
   const nested = acquireStateDatabaseCoordinator({ ...params, operation: "worker-retain" });
-  const owner = records[0].referenceId;
+  const owner = observation(0).referenceId;
   expect(records[1]).toMatchObject({ mode: "reentrant", ownerId: owner, references: 2 });
   first.release();
   expect(records.filter((r) => r.phase === "released")).toHaveLength(0);
@@ -105,7 +124,7 @@ it("joins a borrowed delegate to native custody without treating its release as 
   const params = { ...fixture(), actorId: "fixture-worker-binding" };
   await withStateDatabaseCoordinatorRuntimeDirectory(params.runtimeDirectory, async () => {
     const owner = acquireStateDatabaseCoordinator({ ...params, operation: "state-write" });
-    const ownerId = records[0].referenceId;
+    const ownerId = observation(0).referenceId;
     const delegation = tryCreateStateLifecycleDelegate(params)!;
     const attached = await attachStateLifecycleDelegate(delegation.port, params);
     try {
@@ -165,9 +184,9 @@ it("keeps tracing off by default and refuses arbitrary operation labels or raw i
     diagnosticContext: { actor: "private-actor", command: "private-command", requestId: 7 },
   });
   lease.release();
-  expect(records[0].operation).toBe("unspecified");
-  expect(records[0].actorHash).toMatch(/^[a-f0-9]{16}$/);
-  expect(records[0].commandHash).toMatch(/^[a-f0-9]{16}$/);
+  expect(observation(0).operation).toBe("unspecified");
+  expect(observation(0).actorHash).toMatch(/^[a-f0-9]{16}$/);
+  expect(observation(0).commandHash).toMatch(/^[a-f0-9]{16}$/);
   const text = JSON.stringify(records);
   for (const value of [
     params.databasePath,
@@ -300,10 +319,13 @@ it("links a same-PID native worker holder to an idle waiter and cancels another 
     const holderRecords = raw
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line)["1"])
-      .filter((r) => r?.lock === "state-lifecycle");
-    const held = holderRecords.find((r) => r.phase === "acquired");
-    const released = holderRecords.find((r) => r.phase === "released");
+      .map((line) => {
+        const row: unknown = JSON.parse(line);
+        return isRecord(row) && isRecord(row["1"]) ? row["1"] : undefined;
+      })
+      .filter((r): r is Record<string, unknown> => r?.lock === "state-lifecycle");
+    const held = phaseRecord(holderRecords, "acquired");
+    const released = phaseRecord(holderRecords, "released");
     expect(held).toMatchObject({
       lockId: failed?.lockId,
       operation: "wal-maintenance",
@@ -312,12 +334,16 @@ it("links a same-PID native worker holder to an idle waiter and cancels another 
     });
     expect(held.threadId).not.toBe(failed?.threadId);
     expect(released).toMatchObject({ ownerId: held.referenceId, closed: true });
-    expect(BigInt(held.acquiredMonoNs)).toBeLessThanOrEqual(BigInt(String(failed?.observedMonoNs)));
-    expect(BigInt(String(failed?.observedMonoNs))).toBeLessThan(BigInt(released.observedMonoNs));
+    expect(BigInt(String(held.acquiredMonoNs))).toBeLessThanOrEqual(
+      BigInt(String(failed?.observedMonoNs)),
+    );
+    expect(BigInt(String(failed?.observedMonoNs))).toBeLessThan(
+      BigInt(String(released.observedMonoNs)),
+    );
     if (process.platform === "linux") {
       expect(failed?.blockingPid).toBe(process.pid);
     }
-    expect(holderRecords.find((r) => r.phase === "operation_settled").outcome).toBe("returned");
+    expect(phaseRecord(holderRecords, "operation_settled").outcome).toBe("returned");
     expect(raw).not.toContain("fixture-actor");
     console.info(
       "synthetic state lifecycle evidence",
